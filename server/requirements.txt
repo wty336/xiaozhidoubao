@@ -1,0 +1,4 @@
+# ESP32语音助手服务器依赖包
+websockets>=10.0
+scipy>=1.7.0
+numpy>=1.21.0
