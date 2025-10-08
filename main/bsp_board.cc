@@ -92,7 +92,10 @@ static esp_err_t bsp_i2s_init(uint32_t sample_rate, int channel_format, int bits
         .clk_cfg = {
             .sample_rate_hz = sample_rate,
             .clk_src = I2S_CLK_SRC_DEFAULT,
-            .mclk_multiple = I2S_MCLK_MULTIPLE_256},
+            .ext_clk_freq_hz = 0,  // 不使用外部时钟
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+            .bclk_div = 0,  // 自动计算
+        },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bit_width, I2S_SLOT_MODE_MONO), // 插槽配置
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED, // INMP441 不需要主时钟
@@ -303,7 +306,9 @@ esp_err_t bsp_audio_init(uint32_t sample_rate, int channel_format, int bits_per_
         .clk_cfg = {
             .sample_rate_hz = sample_rate,
             .clk_src = I2S_CLK_SRC_DEFAULT,
+            .ext_clk_freq_hz = 0,  // 不使用外部时钟
             .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+            .bclk_div = 0,  // 自动计算
         },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(bit_width, (channel_format == 1) ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
@@ -319,6 +324,16 @@ esp_err_t bsp_audio_init(uint32_t sample_rate, int channel_format, int bits_per_
             },
         },
     };
+    
+    // 🔧 针对单声道的特殊配置（修复杂音问题）
+    if (channel_format == 1) {
+        // 单声道配置：确保数据发送到正确的声道
+        std_cfg.slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+        std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;  // 使用左声道
+        ESP_LOGI(TAG, "✅ 配置为单声道模式（左声道输出）");
+    } else {
+        ESP_LOGI(TAG, "✅ 配置为立体声模式");
+    }
 
     // 🚀 初始化I2S标准模式
     ret = i2s_channel_init_std_mode(tx_handle, &std_cfg);
@@ -427,6 +442,8 @@ esp_err_t bsp_play_audio(const uint8_t *audio_data, size_t data_len)
     }
 
     // 播放完成后停止I2S输出以防止噪音
+    // 注意：增加延迟确保音频完全播放完成
+    vTaskDelay(pdMS_TO_TICKS(10));
     esp_err_t stop_ret = bsp_audio_stop();
     if (stop_ret != ESP_OK)
     {
@@ -546,23 +563,21 @@ esp_err_t bsp_audio_stop(void)
     // 🟢 只有在通道启用时才禁用它
     if (tx_channel_enabled)
     {
-        // 🔇 发送一些静音数据来清空缓冲区
-        const size_t silence_size = 4096; // 4KB的静音数据
-        uint8_t *silence_buffer = (uint8_t *)calloc(silence_size, 1);
-        if (silence_buffer) {
-            size_t bytes_written = 0;
-            i2s_channel_write(tx_handle, silence_buffer, silence_size, &bytes_written, pdMS_TO_TICKS(100));
-            free(silence_buffer);
-            ESP_LOGD(TAG, "✅ 已发送静音数据清空缓冲区");
-        }
+        // 🔇 立即发送一段静音数据来清空I2S缓冲区
+        const size_t silence_size = 512;
+        static uint8_t silence_data[512] = {0};
+        size_t bytes_written = 0;
+        i2s_channel_write(tx_handle, silence_data, silence_size, &bytes_written, pdMS_TO_TICKS(10));
         
-        // ⏱️ 等待一小段时间让静音数据播放完
-        vTaskDelay(pdMS_TO_TICKS(50));
+        // 等待静音数据播放完成
+        vTaskDelay(pdMS_TO_TICKS(20));
         
-        // 🔌 先通过SD引脚关闭功放，防止噪音
+        // 🔇 立即关闭功放，停止音频输出
         gpio_set_level(I2S_OUT_SD_PIN, 0); // 低电平关闭功放
-        ESP_LOGD(TAG, "✅ MAX98357A功放已关闭");
-        vTaskDelay(pdMS_TO_TICKS(10)); // 等待功放完全关闭
+        ESP_LOGI(TAG, "🔇 MAX98357A功放已关闭，停止音频输出");
+        
+        // 等待功放完全关闭
+        vTaskDelay(pdMS_TO_TICKS(100));
         
         // 🛑️ 禁用I2S发送通道
         ret = i2s_channel_disable(tx_handle);

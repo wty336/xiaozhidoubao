@@ -104,10 +104,26 @@ void WebSocketClient::reconnect_task(void* arg) {
             
             // 先停止现有连接
             esp_websocket_client_stop(ws_client->client_);
-            vTaskDelay(pdMS_TO_TICKS(100));
+            vTaskDelay(pdMS_TO_TICKS(500));
             
             // 重新启动连接
-            esp_websocket_client_start(ws_client->client_);
+            esp_err_t ret = esp_websocket_client_start(ws_client->client_);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "❌ WebSocket重连失败: %s", esp_err_to_name(ret));
+            } else {
+                // 等待连接建立
+                int wait_count = 0;
+                while (!ws_client->connected_ && wait_count < 50) {  // 等待最多5秒
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    wait_count++;
+                }
+                
+                if (ws_client->connected_) {
+                    ESP_LOGI(TAG, "✅ WebSocket重连成功");
+                } else {
+                    ESP_LOGW(TAG, "⚠️ WebSocket重连超时");
+                }
+            }
         }
         
         // 休眠一段时间后再检查
@@ -128,8 +144,9 @@ esp_err_t WebSocketClient::connect() {
     ws_cfg.uri = uri_.c_str();            // 服务器地址
     ws_cfg.buffer_size = BUFFER_SIZE;     // 接收缓冲区8KB
     ws_cfg.task_stack = TASK_STACK_SIZE;  // 任务栈大小8KB
-    ws_cfg.reconnect_timeout_ms = 10000;  // 重连超时10秒
-    ws_cfg.network_timeout_ms = 10000;    // 网络超时10秒
+    ws_cfg.reconnect_timeout_ms = 15000;  // 重连超时15秒
+    ws_cfg.network_timeout_ms = 15000;    // 网络超时15秒
+    ws_cfg.transport = WEBSOCKET_TRANSPORT_OVER_TCP; // 使用TCP传输
     
     // 🎆 创建 WebSocket客户端实例
     client_ = esp_websocket_client_init(&ws_cfg);

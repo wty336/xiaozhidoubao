@@ -1,0 +1,2 @@
+source E:/speech_commands_recognition_with_doubao/build/bootloader/gdbinit/symbols
+source E:/speech_commands_recognition_with_doubao/build/bootloader/gdbinit/connect
